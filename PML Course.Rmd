@@ -1,0 +1,125 @@
+---
+title: "PracticalMachineLearning Course Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(ggridges)
+library(caret)
+library(reshape2)
+library(rattle)
+library(randomForest)
+```
+
+## Goal of the exercise
+
+From http://groupware.les.inf.puc-rio.br/har the description of the dataset includes:
+
+> Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+The task is to model the 'classe' variable based on any of the variables included in the set.
+
+## Data loading, initial exploration and cleaning
+
+First we load the two data sets as follows, and look at the problems:
+
+
+```{r results = 'hide', message = FALSE, warning=FALSE}
+train <- read_csv('pml-training.csv') %>% select(-X1) %>% mutate(classe = factor(classe, levels = LETTERS[1:5]))
+test <- read_csv('pml-testing.csv') %>% select(-X1) #%>%  mutate(classe = factor(classe, levels = LETTERS[1:5]))
+```
+
+Checking the warnings we can see that 182 data points have NA values for some rows in the training set.
+
+```{r message= FALSE,warning = FALSE}
+problems(read_csv('pml-training.csv')) %>% group_by(col) %>% summarize(n= n()) %>% arrange(desc(n))
+```
+
+Many of the columns are not substantially populated. I chose to eliminate those columns.
+Furthermore, we are interested in only the sensor data and the classe output and therefore we shall eliminate the reminder of columns.
+
+```{r}
+train = train[, apply(train, 2, function (x) sum(is.na(x))) %>% subset(., . < 1000) %>% names]
+train = train[, -(1:6)]
+
+```
+
+Verify the yielding training set contains fully populated columns.
+
+```{r}
+sum(apply(train, 2, function (x) sum(is.na(x))) > 0 )
+```
+
+We end up with 52 data columns + 1 column for the outcome.
+
+## Data exploration
+
+Let's look at the variability of variables ending in x, y, z. First, select those variables and plot them in alphabetic order. Further, normalize all variables proportionally between 0 and 1 to be comparable.
+
+```{r}
+dplot1_unnorm <- train %>% select(ends_with('x'), ends_with ('y'), ends_with('z')) %>% select(., sort(names(.)))
+dplot1_cast <- dplot1_unnorm %>% apply(., 2, function(x) (x - min(x)) / (max(x) - min(x))) %>% tbl_df
+dplot1_cast$classe <- train$classe
+dplot1 <- melt(dplot1_cast, id.vars='classe')
+ggplot(dplot1, aes(x=value, y=variable, height=..density..)) + facet_grid(. ~ classe) + geom_density_ridges()
+ggplot(dplot1, aes(x=value, y=variable, height=..density.., color = classe)) + geom_density_ridges()
+```
+
+Clearly such a bulk approach is not useful. Let's look at one of the spatial variables sets individually:
+
+```{r}
+dplot1_cast[, c(1:3, 37)] %>% melt(id.vars = 'classe') %>% ggplot(aes(classe, value)) + facet_grid(variable ~ .) + geom_violin(aes(fill = classe))
+```
+
+Variability among the classes is indeed in there, but no clear separation.
+
+```{r}
+dplot2_unnorm <- train %>% select(-ends_with('x'), -ends_with ('y'), -ends_with('z'), -classe) %>% select(., sort(names(.)))
+dplot2_cast <- dplot2_unnorm %>% apply(., 2, function(x) (x - min(x)) / (max(x) - min(x))) %>% tbl_df
+dplot2_cast$classe <- train$classe
+dplot2 <- melt(dplot2_cast, id.vars='classe')
+ggplot(dplot2, aes(x=value, y=variable, height=..density.., color = classe)) + geom_density_ridges()
+```
+
+Distinctions do exist, especially in the 'belt' variables
+
+```{r}
+dplot2_cast[, c(1:4, 17)] %>% melt(id.vars = 'classe') %>% ggplot(aes(classe, value)) + facet_grid(variable ~ .) + geom_violin(aes(fill = classe))
+```
+
+Class 'A' seems easily distinguished by these non-spatial variables. This is true also for other subgroups of non-spatial variables.
+
+```{r}
+```
+
+## Dimension reduction
+
+To attempt a modeling approach I choose to first extract the principal components, due to the high number of variables with non-visibile distinctions.
+
+```{r}
+preProcess(train %>% select(-classe), method = 'pca')
+```
+
+Let's attempt a tree model first and see how it performs
+
+```{r}
+mrpart <- train(classe ~ ., data = train, method = 'rpart')
+confusionMatrix(train$classe, predict(mrpart, train))
+```
+
+Clearly not working. Let's try a random forest
+
+```{r}
+mrf <- randomForest(classe ~ ., data = train)
+confusionMatrix(train$classe, predict(mrf, train))
+```
+
+WOW! We have a very accurate model, now
+
+
+```{r}
+predict(mrf, test)
+```
